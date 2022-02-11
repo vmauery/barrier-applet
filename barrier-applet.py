@@ -19,22 +19,28 @@
 
 import wx.adv
 import wx
-import time, sys, subprocess
+import time, sys, subprocess, re
+from pathlib import Path
 
 class ExecutionError(Exception):
     pass
 
 class Barrier:
+    LOG_FILE = Path.home() / 'var' / 'log' / 'barriers.log'
     def __init__(self):
         self.p = None
+        self.log_filter = re.compile(r'(NOTE: accepted client connection|client "[^"]*" has disconnected)')
 
     def __del__(self):
         self.stop()
 
     def start(self):
         if not self.running():
+            self.LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self.LOG_FILE.unlink(missing_ok=True)
             # print("launching barrier...")
-            self.p = subprocess.Popen(['/usr/bin/barriers', '--no-tray', '--no-daemon'],
+            self.p = subprocess.Popen(['/usr/bin/barriers', '--no-tray',
+                '--no-daemon', '--log', str(self.LOG_FILE)],
                     stdout=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL)
             if not self.p:
@@ -55,6 +61,18 @@ class Barrier:
         if self.p is None:
             return False
         return self.p.poll() is None
+
+    def has_client(self):
+        lines = []
+        try:
+            with self.LOG_FILE.open() as f:
+                lines = f.readlines() 
+        except:
+            pass
+        lines = list(filter(lambda l: self.log_filter.search(l), lines))
+        if len(lines) > 0 and 'accepted' in lines[-1]:
+            return True
+        return False
 
 class ScreensaverStatus():
     IDLE = 60 # seconds
@@ -97,6 +115,7 @@ class OneArgMenu:
 class TaskBarIcon(wx.adv.TaskBarIcon):
     BARRIER_INHIBITED = ('barrier-inactive.png', 'Barrier Inhibited')
     BARRIER_ACTIVE = ('barrier-active.png', 'Barrier Active')
+    BARRIER_IDLE = ('barrier-idle.png', 'Barrier Idle')
     IDLE_TIMEOUT = 10 # seconds
     def __init__(self, frame):
         self.frame = frame
@@ -104,6 +123,8 @@ class TaskBarIcon(wx.adv.TaskBarIcon):
         self.Bind(wx.adv.EVT_TASKBAR_LEFT_DOWN, self.on_left_down)
         self.timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self.on_timer, self.timer)
+        self.iconTimer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self.updateIcon, self.iconTimer)
         self.barrier = Barrier()
         self.saver = ScreensaverStatus()
         if not self.saver.isIdle():
@@ -139,13 +160,14 @@ class TaskBarIcon(wx.adv.TaskBarIcon):
 
     def start(self):
         # print("TaskBarIcon::start")
-        self.set_icon(self.BARRIER_ACTIVE)
         if not self.barrier.running():
             self.barrier.start()
         self.timer.Start(1000*self.IDLE_TIMEOUT, wx.TIMER_ONE_SHOT)
+        self.updateIcon()
 
     def stop(self):
         # print("TaskBarIcon::stop")
+        self.iconTimer.Stop()
         self.set_icon(self.BARRIER_INHIBITED)
         if self.barrier.running():
             self.barrier.stop()
@@ -174,6 +196,16 @@ class TaskBarIcon(wx.adv.TaskBarIcon):
                 self.start()
         # another round!
         self.timer.Start(1000*self.IDLE_TIMEOUT, wx.TIMER_ONE_SHOT)
+
+    def updateIcon(self, event=None):
+        # print('Timeout')
+        if self.barrier.running():
+            if self.barrier.has_client():
+                self.set_icon(self.BARRIER_ACTIVE)
+            else:
+                self.set_icon(self.BARRIER_IDLE)
+        # another round!
+        self.iconTimer.Start(1000, wx.TIMER_ONE_SHOT)
 
     def on_start(self, event):
         # print('Turn On')
