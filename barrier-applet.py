@@ -21,6 +21,7 @@ import wx.adv
 import wx
 import time, sys, subprocess, re
 from pathlib import Path
+import dbus
 
 class ExecutionError(Exception):
     pass
@@ -116,33 +117,19 @@ class Barrier:
 class ScreensaverStatus():
     IDLE = 60 # seconds
     def __init__(self):
-        self.wasBlanked = self.isBlanked()
-        self.time = time.time()
-
-    def isBlanked(self):
-        p = subprocess.run(['/usr/bin/xfce4-screensaver-command', '--query'],
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                stdin=subprocess.DEVNULL)
-        words = p.stdout.decode().split()
-        blank = 'inactive' not in words
-        # print("screensaver is {}active".format({True:'',False:'in'}[blank]))
-        return blank
-
+        self.bus = dbus.SessionBus()
+    def idleTime(self):
+        idle = self.bus.call_blocking('org.xfce.ScreenSaver', '/', 'org.xfce.ScreenSaver', 'GetActiveTime', '', [])
+        idle = int(idle)
+        if False:
+            if idle > 0:
+                print("screensaver is active for {} seconds".format(idle))
+            else:
+                print("screensaver is inactive")
+        return idle
     def isIdle(self):
-        now = time.time()
-        if self.isBlanked():
-            # newly blanked status
-            if not self.wasBlanked:
-                self.wasBlanked = True
-                self.time = now
-            # how long idle?
-            elif now - self.time > self.IDLE:
-                # print('isIdle: IDLE {}'.format(now))
-                return True
-        else:
-            self.wasBlanked = False
-        # print('isIdle: BUSY {}'.format(now))
-        return False
+        idle = self.idleTime()
+        return idle > self.IDLE;
 
 class OneArgMenu:
     def __init__(self, handler, arg, item):
