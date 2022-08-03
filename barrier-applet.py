@@ -26,23 +26,60 @@ class ExecutionError(Exception):
     pass
 
 class Barrier:
-    LOG_FILE = Path.home() / 'var' / 'log' / 'barriers.log'
-    def __init__(self):
+    MODE_FILE = Path.home() / 'var' / 'run' / 'barrier-mode'
+    def __init__(self, server_mode=None):
+        print("Barrier(mode={})".format(server_mode))
+        self.MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        if server_mode is None:
+            # load mode from file
+            mode_str = "server"
+            try:
+                with open(self.MODE_FILE, "r") as f:
+                    mode_str = f.read().strip()
+            except:
+                with open(self.MODE_FILE, "w") as f:
+                    f.write(mode_str+"\n")
+            print("mode_str = '{}'".format(mode_str))
+            if mode_str == 'client':
+                server_mode = False
+            else:
+                server_mode = True
+        else:
+            # save mode to file
+            if server_mode:
+                mode_str = 'server'
+            else:
+                mode_str = 'client'
+            with open(self.MODE_FILE, "w") as f:
+                f.write(mode_str+"\n")
+        self.server_mode = server_mode
         self.p = None
-        self.log_filter = re.compile(r'(NOTE: accepted client connection|client "[^"]*" has disconnected)')
+        if self.server_mode:
+            self.log_file = Path.home() / 'var' / 'log' / 'barriers.log'
+            self.log_filter = re.compile(r'(NOTE: accepted client connection|client "[^"]*" has disconnected)')
+        else:
+            self.log_file = Path.home() / 'var' / 'log' / 'barrierc.log'
+            self.log_filter = re.compile(r'(connected to server|NOTE: disconnected from server)')
 
     def __del__(self):
         self.stop()
 
     def start(self):
         if not self.running():
-            self.LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-            self.LOG_FILE.unlink(missing_ok=True)
+            self.log_file.parent.mkdir(parents=True, exist_ok=True)
+            self.log_file.unlink(missing_ok=True)
             # print("launching barrier...")
-            self.p = subprocess.Popen(['/usr/bin/barriers', '--no-tray',
-                '--no-daemon', '--log', str(self.LOG_FILE)],
-                    stdout=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL)
+            if self.server_mode:
+                self.p = subprocess.Popen(['/usr/bin/barriers', '--no-tray',
+                    '--no-daemon', '--log', str(self.log_file)],
+                        stdout=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL)
+            else:
+                self.p = subprocess.Popen(['/usr/bin/barrierc', '--no-tray',
+                    '--no-daemon', '--log', str(self.log_file),
+                    'localhost:24800'],
+                        stdout=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL)
             if not self.p:
                 raise ExecutionError('Failed to start barriers')
 
@@ -62,15 +99,17 @@ class Barrier:
             return False
         return self.p.poll() is None
 
-    def has_client(self):
+    def has_connection(self):
         lines = []
         try:
-            with self.LOG_FILE.open() as f:
+            with self.log_file.open() as f:
                 lines = f.readlines() 
         except:
             pass
         lines = list(filter(lambda l: self.log_filter.search(l), lines))
-        if len(lines) > 0 and 'accepted' in lines[-1]:
+        if len(lines) > 0:
+            if 'disconnected' in lines[-1]:
+                return False
             return True
         return False
 
@@ -106,16 +145,14 @@ class ScreensaverStatus():
         return False
 
 class OneArgMenu:
-    def __init__(self, handler, arg):
+    def __init__(self, handler, arg, item):
         self.handler = handler
         self.arg = arg
+        self.item = item
     def __call__(self, event):
-        self.handler(event, self.arg)
+        self.handler(event, self.arg, self.item)
 
 class TaskBarIcon(wx.adv.TaskBarIcon):
-    BARRIER_INHIBITED = ('barrier-inactive.png', 'Barrier Inhibited')
-    BARRIER_ACTIVE = ('barrier-active.png', 'Barrier Active')
-    BARRIER_IDLE = ('barrier-idle.png', 'Barrier Idle')
     IDLE_TIMEOUT = 10 # seconds
     def __init__(self, frame):
         self.frame = frame
@@ -135,18 +172,67 @@ class TaskBarIcon(wx.adv.TaskBarIcon):
     def __del__(self):
         self.barrier.stop()
 
+    def active_icon(self):
+        if self.barrier.server_mode:
+            return ('barrier-active.png', 'Barrier Server Active')
+        else:
+            return ('barrier-active.png', 'Barrier Client Active')
+
+    def inhibited_icon(self):
+        if self.barrier.server_mode:
+            return ('barrier-inactive.png', 'Barrier Server Inhibited')
+        else:
+            return ('barrier-inactive.png', 'Barrier Client Inhibited')
+
+    def idle_icon(self):
+        if self.barrier.server_mode:
+            return ('barrier-idle.png', 'Barrier Server Idle')
+        else:
+            return ('barrier-idle.png', 'Barrier Client Idle')
+
+
+    def set_mode(self, evt, mode, item):
+        restart = self.barrier.running()
+        if mode == 1:
+            if not self.barrier.server_mode:
+                self.stop()
+                print("Server Mode")
+                self.barrier = Barrier(True)
+                if restart:
+                    self.start()
+        else:
+            if self.barrier.server_mode:
+                self.stop()
+                print("Client mode!")
+                self.barrier = Barrier(False)
+                if restart:
+                    self.start()
+
     def CreatePopupMenu(self):
-        def create_menu_item(menu, label, func):
-            item = wx.MenuItem(menu, -1, label)
-            menu.Bind(wx.EVT_MENU, func, id=item.GetId())
+        def create_menu_item(menu, label, func, arg=None, kind=wx.ITEM_NORMAL,
+                checked=False, _s=[]):
+            if len(_s) == 0:
+                _s.append(10)
+            mid = _s[0]
+            _s[0] += 1
+            item = wx.MenuItem(menu, mid, label, kind=kind)
+            cb = OneArgMenu(func, arg, item)
+            menu.Bind(wx.EVT_MENU, cb, id=item.GetId())
             menu.Append(item)
+            if kind == wx.ITEM_RADIO:
+                item.Check(checked)
             return item
         menu = wx.Menu()
-        create_menu_item(menu, '10 Seconds', OneArgMenu(self.on_arm_timer, 10))
-        create_menu_item(menu, '30 Minutes', OneArgMenu(self.on_arm_timer, 32*60))
-        create_menu_item(menu, '1 Hour', OneArgMenu(self.on_arm_timer, 62*60))
-        create_menu_item(menu, '1.5 Hours', OneArgMenu(self.on_arm_timer, 92*60))
-        create_menu_item(menu, '2 Hours', OneArgMenu(self.on_arm_timer, 122*60))
+        create_menu_item(menu, "Server Mode", self.set_mode, 1,
+                kind=wx.ITEM_RADIO, checked=self.barrier.server_mode)
+        create_menu_item(menu, "Client Mode", self.set_mode, 2,
+                kind=wx.ITEM_RADIO, checked=not self.barrier.server_mode)
+        menu.AppendSeparator()
+        create_menu_item(menu, '10 Seconds', self.on_arm_timer, 10)
+        create_menu_item(menu, '30 Minutes', self.on_arm_timer, 32*60)
+        create_menu_item(menu, '1 Hour', self.on_arm_timer, 62*60)
+        create_menu_item(menu, '1.5 Hours', self.on_arm_timer, 92*60)
+        create_menu_item(menu, '2 Hours', self.on_arm_timer, 122*60)
         menu.AppendSeparator()
         create_menu_item(menu, 'Start', self.on_start)
         create_menu_item(menu, 'Stop', self.on_stop)
@@ -168,7 +254,7 @@ class TaskBarIcon(wx.adv.TaskBarIcon):
     def stop(self):
         # print("TaskBarIcon::stop")
         self.iconTimer.Stop()
-        self.set_icon(self.BARRIER_INHIBITED)
+        self.set_icon(self.inhibited_icon())
         if self.barrier.running():
             self.barrier.stop()
 
@@ -180,7 +266,7 @@ class TaskBarIcon(wx.adv.TaskBarIcon):
         else:
             self.start()
 
-    def on_arm_timer(self, event, timeout):
+    def on_arm_timer(self, event, timeout, item):
         # print('Turn off for {} seconds'.format(timeout))
         self.stop()
         self.timer.Start(timeout*1000, wx.TIMER_ONE_SHOT)
@@ -200,10 +286,10 @@ class TaskBarIcon(wx.adv.TaskBarIcon):
     def updateIcon(self, event=None):
         # print('Timeout')
         if self.barrier.running():
-            if self.barrier.has_client():
-                self.set_icon(self.BARRIER_ACTIVE)
+            if self.barrier.has_connection():
+                self.set_icon(self.active_icon())
             else:
-                self.set_icon(self.BARRIER_IDLE)
+                self.set_icon(self.idle_icon())
         # another round!
         self.iconTimer.Start(1000, wx.TIMER_ONE_SHOT)
 
@@ -217,7 +303,7 @@ class TaskBarIcon(wx.adv.TaskBarIcon):
         self.timer.Stop()
         self.stop()
 
-    def on_exit(self, event):
+    def on_exit(self, event, arg, item):
         wx.CallAfter(self.Destroy)
         self.frame.Close()
 
