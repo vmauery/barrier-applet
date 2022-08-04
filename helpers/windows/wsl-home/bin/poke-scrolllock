@@ -1,0 +1,16 @@
+#!/bin/sh -x
+
+LAST_BARRIERC_PID=0
+
+while :; do
+	BARRIERC_PID=$( pidof -x barrierc.exe )
+	if [ "$LAST_BARRIERC_PID" = "$BARRIERC_PID" ]; then
+		powershell.exe -Command '$WShell = New-Object -com "Wscript.Shell"; $WShell.sendkeys("{SCROLLLOCK}"); Start-Sleep -Milliseconds 50; $WShell.sendkeys("{SCROLLLOCK}")'
+		sleep 2m
+	elif [ -n "$BARRIERC_PID" ]; then
+		LAST_BARRIERC_PID="$BARRIERC_PID"
+		sleep 1m
+	else
+		sleep 1m
+	fi
+done

@@ -1,0 +1,3 @@
+screen -t tunnel barrier-tunnel client
+screen -t barrier barrier-exe client
+screen -t poke-key poke-scrolllock

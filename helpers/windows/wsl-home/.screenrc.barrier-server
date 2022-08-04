@@ -1,0 +1,2 @@
+screen -t  tunnel barrier-tunnel server
+screen -t barrier barrier-exe server
