@@ -216,6 +216,7 @@ class TaskBarIcon(wx.adv.TaskBarIcon):
                 kind=wx.ITEM_RADIO, checked=not self.barrier.server_mode)
         menu.AppendSeparator()
         create_menu_item(menu, '10 Seconds', self.on_arm_timer, 10)
+        create_menu_item(menu, '1 minute', self.on_arm_timer, 60)
         create_menu_item(menu, '30 Minutes', self.on_arm_timer, 32*60)
         create_menu_item(menu, '1 Hour', self.on_arm_timer, 62*60)
         create_menu_item(menu, '1.5 Hours', self.on_arm_timer, 92*60)
@@ -280,12 +281,12 @@ class TaskBarIcon(wx.adv.TaskBarIcon):
         # another round!
         self.iconTimer.Start(1000, wx.TIMER_ONE_SHOT)
 
-    def on_start(self, event):
+    def on_start(self, event, arg, item):
         # print('Turn On')
         self.timer.Stop()
         self.start()
 
-    def on_stop(self, event):
+    def on_stop(self, event, arg, item):
         # print('Turn Off')
         self.timer.Stop()
         self.stop()
