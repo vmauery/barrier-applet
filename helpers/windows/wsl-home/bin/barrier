@@ -1,9 +1,14 @@
 #!/bin/sh
 
-sudo mkdir -p -m 0777 '/run/screen'
+[ ! -d /run/screen ] && sudo mkdir -p -m 0777 '/run/screen'
+if screen -ls | grep -q "\<barrier\>"; then
+	exec screen -x barrier
+fi
 if ! netstat -lnt | grep -q ":22"; then
 	sudo service ssh start
 fi
+
+at-home now || echo "must be started at home"
 
 # check which mode to run in
 REMOTE_IP=10.1.1.5

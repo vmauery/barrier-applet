@@ -23,15 +23,17 @@ case "$MODE" in
 esac
 
 while :; do
+	[ $(</tmp/homing) == 'at-home' ] || { sleep 5; continue; }
+	date
 	echo "Starting barrier tunnel to $HOST..."
 
 	case "$MODE" in
 		client)
-			powershell.exe 'c:\Users\vmauery\barrier-client.ps1'
+			pwsh.exe 'c:\Users\vmauery\barrier-client.ps1'
 			;;
 		server)
 			ssh $HOST remove-barriers
-			powershell.exe 'c:\Users\vmauery\barrier-server.ps1'
+			pwsh.exe 'c:\Users\vmauery\barrier-server.ps1'
 			;;
 	esac
 

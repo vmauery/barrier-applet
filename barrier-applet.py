@@ -147,8 +147,10 @@ class Barrier:
 class ScreensaverStatus():
     IDLE = 60 # seconds
     def __init__(self):
+        return
         self.bus = dbus.SessionBus()
     def idleTime(self):
+        return 0
         idle = self.bus.call_blocking('org.xfce.ScreenSaver', '/', 'org.xfce.ScreenSaver', 'GetActiveTime', '', [])
         idle = int(idle)
         if False:

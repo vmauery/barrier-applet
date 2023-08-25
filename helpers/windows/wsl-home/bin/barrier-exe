@@ -27,16 +27,18 @@ export PATH="/mnt/c/Program Files/Barrier:$PATH"
 TIME=5
 DEBUG=DEBUG2
 DEBUG=INFO
+NOTRAY="--no-tray"
 
 while :; do
 	sleep $TIME
+	[ $(</tmp/homing) == 'at-home' ] || continue
 	echo "Starting barrier $MODE..."
 	case "$MODE" in
 		client)
-			barrierc.exe --no-restart --no-tray -d $DEBUG $IP
+			barrierc.exe --no-restart $NOTRAY -d $DEBUG $IP
 			;;
 		server)
-			barriers.exe --no-daemon --no-restart --no-tray -d $DEBUG -c 'C:\Users\vmauery\barrier-server.sgc'
+			barriers.exe --no-daemon --no-restart $NOTRAY -d $DEBUG -c 'C:\Users\vmauery\barrier-server.sgc'
 			;;
 	esac
 	echo "Barrier $MODE finished ($?)"

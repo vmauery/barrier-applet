@@ -1,0 +1,17 @@
+#!/bin/bash
+
+[ $# -ne 0 ] || set -x
+
+HOST=10.1.1.5
+
+while :; do
+    ping -t 3 -c 1 -q $HOST >&/dev/null
+    N=$?
+    if [ $N -eq 0 ]; then
+        echo at-home > /tmp/homing
+    else
+        echo away > /tmp/homing
+    fi
+    [ $# -ne 0 ] && exit $N
+    sleep 5
+done
