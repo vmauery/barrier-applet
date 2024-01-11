@@ -23,7 +23,7 @@ case "$MODE" in
 esac
 
 while :; do
-	[ $(</tmp/homing) == 'at-home' ] || { sleep 5; continue; }
+	[ "$(</tmp/homing)" == 'at-home' ] || { sleep 5; continue; }
 	date
 	echo "Starting barrier tunnel to $HOST..."
 

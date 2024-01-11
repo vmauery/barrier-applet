@@ -1,0 +1,14 @@
+#!/bin/bash -x
+
+HOST=10.1.1.5
+#VMAUERY_DESK=vmauery-desk.jf.intel.com
+VMAUERY_DESK=10.243.48.71
+
+while :; do
+  if [ "$(</tmp/homing)" == 'at-home' ]; then
+    echo "Reconnect at $(date)"
+    ssh -N -T -o ExitOnForwardFailure=yes -R 2222:$VMAUERY_DESK:22 $HOST ||
+      ssh $HOST "remove-sshs"
+  fi
+  sleep 5
+done

@@ -1,0 +1,5 @@
+[wsl2]
+localhostforwarding=true
+guiApplications=true
+vmIdleTimeout=100000000
+networkingMode=mirrored

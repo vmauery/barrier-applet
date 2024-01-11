@@ -1,0 +1,10 @@
+#!/bin/bash -x
+
+#VMAUERY_DESK=vmauery-desk.jf.intel.com
+VMAUERY_DESK=10.243.48.71
+
+while :; do
+    echo "Reconnect at $(date)"
+    ssh -o ExitOnForwardFailure=yes -R localhost:1993:linux.intel.com:993 $VMAUERY_DESK "killall -INT fetchmail; fetchmail -N -v"
+    sleep 5
+done

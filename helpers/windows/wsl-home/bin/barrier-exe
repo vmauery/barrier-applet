@@ -31,7 +31,7 @@ NOTRAY="--no-tray"
 
 while :; do
 	sleep $TIME
-	[ $(</tmp/homing) == 'at-home' ] || continue
+	[ "$(</tmp/homing)" == 'at-home' ] || continue
 	echo "Starting barrier $MODE..."
 	case "$MODE" in
 		client)
