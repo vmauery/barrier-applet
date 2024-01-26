@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# applet for controlling barriers based on screensaver activity
+# applet for controlling input-leap based on screensaver activity
 # Copyright (C) 2021 Vernon Mauery
 #
 # This program is free software; you can redistribute it and/or
@@ -24,6 +24,7 @@ from pathlib import Path
 from datetime import datetime
 import dbus
 import json
+import signal
 
 def log(msg):
     now = datetime.now()
@@ -61,23 +62,23 @@ class Settings(object):
             json.dump(self.___values, f, indent=4)
             f.write("\n")
 
-class Barrier:
-    SETTINGS_FILE = Path.home() / '.config' / 'barrier' / 'barrier-applet.conf'
+class Input_Leap:
+    SETTINGS_FILE = Path.home() / '.config' / 'input-leap' / 'input-leap-applet.conf'
     SETTINGS_DEFAULTS={ "mode": "client", "follow_screensaver": False }
     def __init__(self, server_mode=None):
         self.settings = Settings(self.SETTINGS_FILE, self.SETTINGS_DEFAULTS)
-        log("Barrier(mode={})".format(server_mode))
-        log("barrier.settings = {}".format(self.settings.values()))
+        log("input-leap(mode={})".format(server_mode))
+        log("input-leap.settings = {}".format(self.settings.values()))
         if server_mode is not None:
             self.settings.mode = server_mode
         else:
             self.server_mode = self.settings.mode == "server"
         self.p = None
         if self.server_mode:
-            self.log_file = Path.home() / 'var' / 'log' / 'barriers.log'
+            self.log_file = Path.home() / 'var' / 'log' / 'input-leaps.log'
             self.log_filter = re.compile(r'(NOTE: accepted client connection|client "[^"]*" has disconnected)')
         else:
-            self.log_file = Path.home() / 'var' / 'log' / 'barrierc.log'
+            self.log_file = Path.home() / 'var' / 'log' / 'input-leapc.log'
             self.log_filter = re.compile(r'(connected to server|NOTE: disconnected from server)')
 
     def __del__(self):
@@ -87,24 +88,24 @@ class Barrier:
         if not self.running():
             self.log_file.parent.mkdir(parents=True, exist_ok=True)
             self.log_file.unlink(missing_ok=True)
-            log("launching barrier ({} mode) ...".format(self.settings.mode))
+            log("launching input-leap ({} mode) ...".format(self.settings.mode))
             if self.server_mode:
-                pname = '/usr/bin/barriers'
+                pname = '/usr/bin/input-leaps'
                 self.kill_others(pname)
                 self.p = subprocess.Popen([pname, '--no-tray',
                     '--no-daemon', '--log', str(self.log_file)],
                         stdout=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL)
             else:
-                pname = '/usr/bin/barrierc'
+                pname = '/usr/bin/input-leapc'
                 self.kill_others(pname)
                 self.p = subprocess.Popen([pname, '--no-tray',
-                    '--no-daemon', '--log', str(self.log_file),
+                    '--no-daemon', '--use-x11', '--log', str(self.log_file),
                     'localhost:24800'],
                         stdout=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL)
             if not self.p:
-                raise ExecutionError('Failed to start barriers')
+                raise ExecutionError('Failed to start input-leaps')
 
     def kill_others(self, others):
          for line in os.popen("ps ax | grep " + others + " | grep -v grep"):
@@ -114,7 +115,7 @@ class Barrier:
 
     def stop(self):
         if self.running():
-            log("stopping barrier...")
+            log("stopping input-leap...")
             self.p.terminate()
             try:
                 self.p.wait(timeout=0.5)
@@ -127,7 +128,7 @@ class Barrier:
         if self.p is None:
             return False
         r = self.p.poll() is None
-        log("barrier alive")
+        log("input-leap alive")
         return r
 
     def has_connection(self):
@@ -181,9 +182,9 @@ class TaskBarIcon(wx.adv.TaskBarIcon):
         self.Bind(wx.EVT_TIMER, self.on_timer, self.timer)
         self.iconTimer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self.updateIcon, self.iconTimer)
-        self.barrier = Barrier()
+        self.input_leap = Input_Leap()
         self.saver = ScreensaverStatus()
-        self.follow_screensaver = self.barrier.settings.follow_screensaver
+        self.follow_screensaver = self.input_leap.settings.follow_screensaver
         if not self.follow_screensaver:
             self.start()
         else:
@@ -193,45 +194,45 @@ class TaskBarIcon(wx.adv.TaskBarIcon):
                 self.start()
 
     def __del__(self):
-        self.barrier.stop()
+        self.input_leap.stop()
 
     def active_icon(self):
-        if self.barrier.server_mode:
-            return ('barrier-active.png', 'Barrier Server Active')
+        if self.input_leap.server_mode:
+            return ('input-leap-active.png', 'input-leap Server Active')
         else:
-            return ('barrier-active.png', 'Barrier Client Active')
+            return ('input-leap-active.png', 'input-leap Client Active')
 
     def inhibited_icon(self):
-        if self.barrier.server_mode:
-            return ('barrier-inactive.png', 'Barrier Server Inhibited')
+        if self.input_leap.server_mode:
+            return ('input-leap-inactive.png', 'input-leap Server Inhibited')
         else:
-            return ('barrier-inactive.png', 'Barrier Client Inhibited')
+            return ('input-leap-inactive.png', 'input-leap Client Inhibited')
 
     def idle_icon(self):
-        if self.barrier.server_mode:
-            return ('barrier-idle.png', 'Barrier Server Idle')
+        if self.input_leap.server_mode:
+            return ('input-leap-idle.png', 'input-leap Server Idle')
         else:
-            return ('barrier-idle.png', 'Barrier Client Idle')
+            return ('input-leap-idle.png', 'input-leap Client Idle')
 
 
     def set_follow(self, evt, unused, item):
         self.follow_screensaver = not self.follow_screensaver
-        self.barrier.settings.follow_screensaver = self.follow_screensaver
+        self.input_leap.settings.follow_screensaver = self.follow_screensaver
 
     def set_mode(self, evt, mode, item):
-        restart = self.barrier.running()
+        restart = self.input_leap.running()
         if mode == 1:
-            if not self.barrier.server_mode:
+            if not self.input_leap.server_mode:
                 self.stop()
                 log("Server Mode")
-                self.barrier = Barrier(True)
+                self.input_leap = Input_Leap(True)
                 if restart:
                     self.start()
         else:
-            if self.barrier.server_mode:
+            if self.input_leap.server_mode:
                 self.stop()
                 log("Client mode!")
-                self.barrier = Barrier(False)
+                self.input_leap = Input_Leap(False)
                 if restart:
                     self.start()
 
@@ -256,9 +257,9 @@ class TaskBarIcon(wx.adv.TaskBarIcon):
                 kind=wx.ITEM_CHECK,
                 checked=self.follow_screensaver)
         create_menu_item(menu, "Server Mode", self.set_mode, 1,
-                kind=wx.ITEM_RADIO, checked=self.barrier.server_mode)
+                kind=wx.ITEM_RADIO, checked=self.input_leap.server_mode)
         create_menu_item(menu, "Client Mode", self.set_mode, 2,
-                kind=wx.ITEM_RADIO, checked=not self.barrier.server_mode)
+                kind=wx.ITEM_RADIO, checked=not self.input_leap.server_mode)
         menu.AppendSeparator()
         create_menu_item(menu, '10 Seconds', self.on_arm_timer, 10)
         create_menu_item(menu, '1 minute', self.on_arm_timer, 60)
@@ -279,8 +280,8 @@ class TaskBarIcon(wx.adv.TaskBarIcon):
 
     def start(self):
         # log("TaskBarIcon::start")
-        if not self.barrier.running():
-            self.barrier.start()
+        if not self.input_leap.running():
+            self.input_leap.start()
         self.timer.Start(1000*self.IDLE_TIMEOUT, wx.TIMER_ONE_SHOT)
         self.updateIcon()
 
@@ -288,13 +289,13 @@ class TaskBarIcon(wx.adv.TaskBarIcon):
         # log("TaskBarIcon::stop")
         self.iconTimer.Stop()
         self.set_icon(self.inhibited_icon())
-        if self.barrier.running():
-            self.barrier.stop()
+        if self.input_leap.running():
+            self.input_leap.stop()
 
     def on_left_down(self, event):
         # log('Toggle on-off')
         self.timer.Stop()
-        if self.barrier.running():
+        if self.input_leap.running():
             self.stop()
         else:
             self.start()
@@ -309,21 +310,21 @@ class TaskBarIcon(wx.adv.TaskBarIcon):
         self.timer.Stop()
         if self.follow_screensaver:
             if self.saver.isIdle():
-                if self.barrier.running():
+                if self.input_leap.running():
                     self.stop()
             else:
-                if not self.barrier.running():
+                if not self.input_leap.running():
                     self.start()
         else:
-            if not self.barrier.running():
+            if not self.input_leap.running():
                 self.start()
         # another round!
         self.timer.Start(1000*self.IDLE_TIMEOUT, wx.TIMER_ONE_SHOT)
 
     def updateIcon(self, event=None):
         # log('Timeout')
-        if self.barrier.running():
-            if self.barrier.has_connection():
+        if self.input_leap.running():
+            if self.input_leap.has_connection():
                 self.set_icon(self.active_icon())
             else:
                 self.set_icon(self.idle_icon())
