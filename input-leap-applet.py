@@ -33,6 +33,23 @@ def log(msg):
 class ExecutionError(Exception):
     pass
 
+class ScreensaverInhibit:
+    def __init__(self):
+        self.cookie = None
+        self.bus = dbus.SessionBus()
+        self.proxy = self.bus.get_object('org.freedesktop.ScreenSaver',
+                                         '/org/freedesktop/ScreenSaver')
+        self.iface = dbus.Interface(self.proxy, 'org.freedesktop.ScreenSaver')
+        self.cookie = self.iface.Inhibit('work-inhibitor', "gnome-inhibit")
+        print("Inhibiting screensaver (pid: {}, cookie {})".format(
+            os.getpid(), self.cookie))
+    def __del__(self):
+        if self.cookie is not None:
+            print("UnInhibiting screensaver (pid: {}, cookie {})".format(
+                os.getpid(), self.cookie))
+            self.iface.UnInhibit(self.cookie)
+
+
 class Settings(object):
     def __init__(self, fn, defaults = None):
         self.___fn = fn
@@ -90,18 +107,18 @@ class Input_Leap:
             self.log_file.unlink(missing_ok=True)
             log("launching input-leap ({} mode) ...".format(self.settings.mode))
             if self.server_mode:
-                pname = '/usr/bin/input-leaps'
+                pname = '/usr/local/bin/input-leaps'
                 self.kill_others(pname)
                 self.p = subprocess.Popen([pname, '--no-tray',
-                    '--no-daemon', '--log', str(self.log_file)],
+                    '--no-daemon', '--restart', '--log', str(self.log_file)],
                         stdout=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL)
             else:
-                pname = '/usr/bin/input-leapc'
+                pname = '/usr/local/bin/input-leapc'
                 self.kill_others(pname)
                 self.p = subprocess.Popen([pname, '--no-tray',
-                    '--no-daemon', '--use-x11', '--log', str(self.log_file),
-                    'localhost:24800'],
+                    '--no-daemon', '--use-x11', '--restart',
+                    '--log', str(self.log_file), '10.1.1.4:24800'],
                         stdout=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL)
             if not self.p:
@@ -124,11 +141,16 @@ class Input_Leap:
             self.p.wait()
             self.p = None
 
-    def running(self):
-        if self.p is None:
-            return False
-        r = self.p.poll() is None
-        log("input-leap alive")
+    def running(self, current_icon=None):
+        r = False
+        pid = ""
+        if self.p is not None:
+            r = self.p.poll() is None
+            pid = f" ({self.p.pid})"
+        msg = ""
+        if current_icon is not None:
+            msg = ", {}".format(("inactive", "active", "idle")[current_icon])
+        log(f"input-leap alive: {r}{pid}{msg}")
         return r
 
     def has_connection(self):
@@ -174,6 +196,9 @@ class OneArgMenu:
 
 class TaskBarIcon(wx.adv.TaskBarIcon):
     IDLE_TIMEOUT = 10 # seconds
+    INACTIVE = 0
+    ACTIVE = 1
+    IDLE = 2
     def __init__(self, frame):
         self.frame = frame
         super(TaskBarIcon, self).__init__()
@@ -181,10 +206,12 @@ class TaskBarIcon(wx.adv.TaskBarIcon):
         self.timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self.on_timer, self.timer)
         self.iconTimer = wx.Timer(self)
+        self.current_icon = None
         self.Bind(wx.EVT_TIMER, self.updateIcon, self.iconTimer)
         self.input_leap = Input_Leap()
         self.saver = ScreensaverStatus()
         self.follow_screensaver = self.input_leap.settings.follow_screensaver
+        self.screensaver_inhibitor = None
         if not self.follow_screensaver:
             self.start()
         else:
@@ -198,22 +225,30 @@ class TaskBarIcon(wx.adv.TaskBarIcon):
 
     def active_icon(self):
         if self.input_leap.server_mode:
+            self.current_icon = self.ACTIVE
             return ('input-leap-active.png', 'input-leap Server Active')
         else:
+            if self.current_icon != self.ACTIVE:
+                self.screensaver_inhibitor = ScreensaverInhibit()
+            self.current_icon = self.ACTIVE
             return ('input-leap-active.png', 'input-leap Client Active')
 
     def inhibited_icon(self):
+        self.current_icon = self.INACTIVE
         if self.input_leap.server_mode:
             return ('input-leap-inactive.png', 'input-leap Server Inhibited')
         else:
+            self.screensaver_inhibitor = None
             return ('input-leap-inactive.png', 'input-leap Client Inhibited')
 
     def idle_icon(self):
+        self.current_icon = self.IDLE
         if self.input_leap.server_mode:
             return ('input-leap-idle.png', 'input-leap Server Idle')
         else:
+            self.current_icon = self.IDLE
+            self.screensaver_inhibitor = None
             return ('input-leap-idle.png', 'input-leap Client Idle')
-
 
     def set_follow(self, evt, unused, item):
         self.follow_screensaver = not self.follow_screensaver
@@ -323,7 +358,7 @@ class TaskBarIcon(wx.adv.TaskBarIcon):
 
     def updateIcon(self, event=None):
         # log('Timeout')
-        if self.input_leap.running():
+        if self.input_leap.running(self.current_icon):
             if self.input_leap.has_connection():
                 self.set_icon(self.active_icon())
             else:
