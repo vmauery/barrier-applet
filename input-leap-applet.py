@@ -69,12 +69,13 @@ class ScreensaverStatus():
             self.handler()
 
     def unlock_callback(self, handler):
+        if handler is None:
+            return
         self.handler = handler
         self.bus.add_signal_receiver(self._unlock_handler,
-                                     dbus_interface='org.gnome.ScreenSaver', 
+                                     dbus_interface='org.gnome.ScreenSaver',
                                      signal_name='ActiveChanged',
                                      bus_name='org.gnome.ScreenSaver')
-
 
 class ScreensaverInhibit:
     def __init__(self, bus):
@@ -101,7 +102,7 @@ class Settings(object):
     def __getattribute__(self, name):
         if name.startswith("_Settings___") or name in ['load', 'save', 'values']:
             return super(Settings, self).__getattribute__(name)
-        return self.___values[name]
+        return self.___values[name] or None
     def __setattr__(self, name, value):
         if name.startswith("_Settings___"):
             return super(Settings, self).__setattr__(name, value)
@@ -147,6 +148,15 @@ class Input_Leap:
 
     def __del__(self):
         self.stop()
+
+    def unlock_remote(self, *args, **kwargs):
+        cmd = self.settings.remote_unlock_command
+        if cmd is None:
+            return
+        print(f"unlocking remote because of local screen unlock: {cmd}")
+        self.p = subprocess.Popen([cmd],
+            stdout=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL)
 
     def start(self):
         if not self.running():
@@ -234,10 +244,12 @@ class InputLeapApplication(Gtk.Application):
         self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
 
         self.bus = dbus.SessionBus()
-
         self.input_leap = Input_Leap()
         self.saver = ScreensaverStatus(self.bus)
-        self.saver.unlock_callback(self.restart_daemon)
+        if self.input_leap.server_mode:
+            self.saver.unlock_callback(self.input_leap.unlock_remote)
+        else:
+            self.saver.unlock_callback(self.restart_daemon)
 
         self.follow_screensaver = self.input_leap.settings.follow_screensaver
         self.screensaver_inhibitor = None
@@ -338,7 +350,6 @@ class InputLeapApplication(Gtk.Application):
         else:
             if self.input_leap.current_icon != self.input_leap.ACTIVE:
                 self.screensaver_inhibitor = ScreensaverInhibit(self.bus)
-                pass
             self.input_leap.current_icon = self.input_leap.ACTIVE
             return ('input-leap-active', 'input-leap Client Active')
 
