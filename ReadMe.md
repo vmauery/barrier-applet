@@ -1,10 +1,10 @@
 # Barrier Applet
 
-This is a python-wx system-tray applet intended to control the
-[Barrier](https://github.com/debauchee/barrier) application based on
-screensaver status.
+This is a python GTK system-tray applet intended to control the
+[Input Leap](https://github.com/input-leap/input-leap.git) application
+based on screensaver status.
 
-I know that Barrier comes with a tray applet, but I wanted more control
+I know that Input Leap comes with a tray applet, but I wanted more control
 over the behavior, so I made this.
 
 My setup is a little complicated because connecting to a Windows+WSL2

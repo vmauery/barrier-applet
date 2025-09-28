@@ -17,14 +17,21 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
-import wx.adv
-import wx
+import gi
+import gc
+import signal
 import time, sys, subprocess, re, os
 from pathlib import Path
 from datetime import datetime
 import dbus
 import json
-import signal
+
+gi.require_version('Gtk', '3.0')
+gi.require_version('AppIndicator3', '0.1')
+
+from dbus.mainloop.glib import DBusGMainLoop
+from gi.repository import AppIndicator3, Gdk, Gio, GLib, Gtk
+from gi.repository.GdkPixbuf import InterpType, Pixbuf
 
 def log(msg):
     now = datetime.now()
@@ -33,10 +40,46 @@ def log(msg):
 class ExecutionError(Exception):
     pass
 
+class ScreensaverStatus():
+    IDLE = 60 # seconds
+    def __init__(self, bus):
+        self.bus = bus
+        self.handler = None
+
+    def idleTime(self):
+        return 0
+        idle = self.bus.call_blocking('org.gnome.ScreenSaver',
+                                      '/org/gnome/ScreenSaver',
+                                      'org.gnome.ScreenSaver',
+                                      'GetActiveTime', '', [])
+        idle = int(idle)
+        if False:
+            if idle > 0:
+                log("screensaver is active for {} seconds".format(idle))
+            else:
+                log("screensaver is inactive")
+        return idle
+    def isIdle(self):
+        idle = self.idleTime()
+        return idle > self.IDLE
+
+    def _unlock_handler(self, is_active):
+        print(f"org.gnome.ScreenSaver ActiveChanged -> {is_active}")
+        if not is_active and self.handler:
+            self.handler()
+
+    def unlock_callback(self, handler):
+        self.handler = handler
+        self.bus.add_signal_receiver(self._unlock_handler,
+                                     dbus_interface='org.gnome.ScreenSaver', 
+                                     signal_name='ActiveChanged',
+                                     bus_name='org.gnome.ScreenSaver')
+
+
 class ScreensaverInhibit:
-    def __init__(self):
+    def __init__(self, bus):
         self.cookie = None
-        self.bus = dbus.SessionBus()
+        self.bus = bus
         self.proxy = self.bus.get_object('org.freedesktop.ScreenSaver',
                                          '/org/freedesktop/ScreenSaver')
         self.iface = dbus.Interface(self.proxy, 'org.freedesktop.ScreenSaver')
@@ -48,7 +91,6 @@ class ScreensaverInhibit:
             print("UnInhibiting screensaver (pid: {}, cookie {})".format(
                 os.getpid(), self.cookie))
             self.iface.UnInhibit(self.cookie)
-
 
 class Settings(object):
     def __init__(self, fn, defaults = None):
@@ -82,7 +124,12 @@ class Settings(object):
 class Input_Leap:
     SETTINGS_FILE = Path.home() / '.config' / 'input-leap' / 'input-leap-applet.conf'
     SETTINGS_DEFAULTS={ "mode": "client", "follow_screensaver": False }
+    INACTIVE = 0
+    ACTIVE = 1
+    IDLE = 2
     def __init__(self, server_mode=None):
+        self.current_icon = self.INACTIVE
+        self.p = None
         self.settings = Settings(self.SETTINGS_FILE, self.SETTINGS_DEFAULTS)
         log("input-leap(mode={})".format(server_mode))
         log("input-leap.settings = {}".format(self.settings.values()))
@@ -148,8 +195,9 @@ class Input_Leap:
             r = self.p.poll() is None
             pid = f" ({self.p.pid})"
         msg = ""
-        if current_icon is not None:
-            msg = ", {}".format(("inactive", "active", "idle")[current_icon])
+        if current_icon is None:
+            current_icon = self.current_icon
+        msg = ", {}".format(("inactive", "active", "idle")[current_icon])
         log(f"input-leap alive: {r}{pid}{msg}")
         return r
 
@@ -167,51 +215,33 @@ class Input_Leap:
             return True
         return False
 
-class ScreensaverStatus():
-    IDLE = 60 # seconds
-    def __init__(self):
-        return
-        self.bus = dbus.SessionBus()
-    def idleTime(self):
-        return 0
-        idle = self.bus.call_blocking('org.xfce.ScreenSaver', '/', 'org.xfce.ScreenSaver', 'GetActiveTime', '', [])
-        idle = int(idle)
-        if False:
-            if idle > 0:
-                log("screensaver is active for {} seconds".format(idle))
-            else:
-                log("screensaver is inactive")
-        return idle
-    def isIdle(self):
-        idle = self.idleTime()
-        return idle > self.IDLE;
+def appdir():
+    return os.path.dirname(os.path.realpath(__file__))
 
-class OneArgMenu:
-    def __init__(self, handler, arg, item):
-        self.handler = handler
-        self.arg = arg
-        self.item = item
-    def __call__(self, event):
-        self.handler(event, self.arg, self.item)
-
-class TaskBarIcon(wx.adv.TaskBarIcon):
+class InputLeapApplication(Gtk.Application):
     IDLE_TIMEOUT = 10 # seconds
-    INACTIVE = 0
-    ACTIVE = 1
-    IDLE = 2
-    def __init__(self, frame):
-        self.frame = frame
-        super(TaskBarIcon, self).__init__()
-        self.Bind(wx.adv.EVT_TASKBAR_LEFT_DOWN, self.on_left_down)
-        self.timer = wx.Timer(self)
-        self.Bind(wx.EVT_TIMER, self.on_timer, self.timer)
-        self.iconTimer = wx.Timer(self)
-        self.current_icon = None
-        self.Bind(wx.EVT_TIMER, self.updateIcon, self.iconTimer)
+
+    def __init__(self):
+        # mechanism to capture timeout_source ID
+        self.delay_id = None
+
+        self.indicator = AppIndicator3.Indicator.new(
+            'Input-Leap-Control',
+            'input-leap-messages',
+            AppIndicator3.IndicatorCategory.APPLICATION_STATUS,
+        )
+        self.indicator.set_icon_theme_path(f"{appdir()}/media")
+        self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
+
+        self.bus = dbus.SessionBus()
+
         self.input_leap = Input_Leap()
-        self.saver = ScreensaverStatus()
+        self.saver = ScreensaverStatus(self.bus)
+        self.saver.unlock_callback(self.restart_daemon)
+
         self.follow_screensaver = self.input_leap.settings.follow_screensaver
         self.screensaver_inhibitor = None
+
         if not self.follow_screensaver:
             self.start()
         else:
@@ -220,41 +250,120 @@ class TaskBarIcon(wx.adv.TaskBarIcon):
             else:
                 self.start()
 
+        self.set_icon(self.inhibited_icon())
+
+        self.menu = Gtk.Menu()
+        self.indicator.set_menu(self.menu)
+
+        self.menu_follow_screensaver = Gtk.CheckMenuItem(
+            label='Follow Screensaver', active=self.follow_screensaver)
+        self.menu_server_mode = Gtk.RadioMenuItem(
+                label='Server Mode', active=self.input_leap.server_mode)
+        self.menu_client_mode = Gtk.RadioMenuItem(
+                label='Client Mode', active=not self.input_leap.server_mode,
+                group=self.menu_server_mode)
+        self.menu_delay_1s = Gtk.MenuItem(label='Restart')
+        self.menu_delay_10s = Gtk.MenuItem(label='10 Seconds')
+        self.menu_delay_60s = Gtk.MenuItem(label='1 Minute')
+        self.menu_delay_30m = Gtk.MenuItem(label='30 Minutes')
+        self.menu_delay_60m = Gtk.MenuItem(label='1 Hour')
+        self.menu_delay_90m = Gtk.MenuItem(label='1.5 Hours')
+        self.menu_delay_120m = Gtk.MenuItem(label='2 Hours')
+        self.menu_service_start= Gtk.MenuItem(label='Start')
+        self.menu_service_stop = Gtk.MenuItem(label='Stop')
+        self.menu_service_toggle = Gtk.MenuItem(label='Toggle')
+        self.menu_quit = Gtk.MenuItem(label='Exit')
+
+        self.menu_follow_screensaver.connect('activate', self.set_follow)
+        self.menu_delay_1s.connect('activate', self.delay_handler, 1)
+        self.menu_delay_10s.connect('activate', self.delay_handler, 10)
+        self.menu_delay_60s.connect('activate', self.delay_handler, 60)
+        self.menu_delay_30m.connect('activate', self.delay_handler, 30 * 60)
+        self.menu_delay_60m.connect('activate', self.delay_handler, 60 * 60)
+        self.menu_delay_90m.connect('activate', self.delay_handler, 90 * 60)
+        self.menu_delay_120m.connect('activate', self.delay_handler, 120 * 60)
+        self.menu_service_start.connect('activate', self.service_start_handler)
+        self.menu_service_stop.connect('activate', self.service_stop_handler)
+        self.menu_service_toggle.connect('activate', self.service_toggle_handler)
+        self.menu_quit.connect('activate', self.quit_handler)
+
+        # toggle on / off on middle click
+        self.indicator.set_secondary_activate_target(self.menu_service_toggle)
+
+        self.menu.append(self.menu_follow_screensaver)
+        self.menu.append(self.menu_server_mode)
+        self.menu.append(self.menu_client_mode)
+        self.menu.append(Gtk.SeparatorMenuItem())
+        self.menu.append(self.menu_delay_1s)
+        self.menu.append(self.menu_delay_10s)
+        self.menu.append(self.menu_delay_60s)
+        self.menu.append(self.menu_delay_30m)
+        self.menu.append(self.menu_delay_60m)
+        self.menu.append(self.menu_delay_90m)
+        self.menu.append(self.menu_delay_120m)
+        self.menu.append(Gtk.SeparatorMenuItem())
+        self.menu.append(self.menu_service_start)
+        self.menu.append(self.menu_service_stop)
+        self.menu.append(Gtk.SeparatorMenuItem())
+        self.menu.append(self.menu_quit)
+
+        GLib.timeout_add_seconds(30, self.collect_garbage)
+        GLib.timeout_add_seconds(1, self.status_timer)
+
+        self.menu.show_all()
+
     def __del__(self):
         self.input_leap.stop()
 
+    def restart_daemon(self, *args, **kwargs):
+        print("restarting because of screen unlock")
+        self.delay_handler(None, 1)
+
+    def delay_handler(self, widget, timeout):
+        print(f"delay_handler({timeout})")
+        self.stop()
+        self.stop_delay_timer()
+        self.delay_id = GLib.timeout_add_seconds(timeout, self.delayed_start)
+
+    def delayed_start(self):
+        print("delayed_start")
+        self.stop_delay_timer()
+        self.start()
+        return GLib.SOURCE_REMOVE
+
     def active_icon(self):
         if self.input_leap.server_mode:
-            self.current_icon = self.ACTIVE
-            return ('input-leap-active.png', 'input-leap Server Active')
+            self.input_leap.current_icon = self.input_leap.ACTIVE
+            return ('input-leap-active', 'input-leap Server Active')
         else:
-            if self.current_icon != self.ACTIVE:
-                self.screensaver_inhibitor = ScreensaverInhibit()
-            self.current_icon = self.ACTIVE
-            return ('input-leap-active.png', 'input-leap Client Active')
+            if self.input_leap.current_icon != self.input_leap.ACTIVE:
+                self.screensaver_inhibitor = ScreensaverInhibit(self.bus)
+                pass
+            self.input_leap.current_icon = self.input_leap.ACTIVE
+            return ('input-leap-active', 'input-leap Client Active')
 
     def inhibited_icon(self):
-        self.current_icon = self.INACTIVE
+        self.input_leap.current_icon = self.input_leap.INACTIVE
         if self.input_leap.server_mode:
-            return ('input-leap-inactive.png', 'input-leap Server Inhibited')
+            return ('input-leap-inactive', 'input-leap Server Inhibited')
         else:
             self.screensaver_inhibitor = None
-            return ('input-leap-inactive.png', 'input-leap Client Inhibited')
+            return ('input-leap-inactive', 'input-leap Client Inhibited')
 
     def idle_icon(self):
-        self.current_icon = self.IDLE
+        self.input_leap.current_icon = self.input_leap.IDLE
         if self.input_leap.server_mode:
-            return ('input-leap-idle.png', 'input-leap Server Idle')
+            return ('input-leap-idle', 'input-leap Server Idle')
         else:
-            self.current_icon = self.IDLE
+            self.input_leap.current_icon = self.input_leap.IDLE
             self.screensaver_inhibitor = None
-            return ('input-leap-idle.png', 'input-leap Client Idle')
+            return ('input-leap-idle', 'input-leap Client Idle')
 
-    def set_follow(self, evt, unused, item):
+    def set_follow(self, *args, **kwargs):
         self.follow_screensaver = not self.follow_screensaver
         self.input_leap.settings.follow_screensaver = self.follow_screensaver
 
-    def set_mode(self, evt, mode, item):
+    def set_mode(self, *args, **kwargs):
         restart = self.input_leap.running()
         if mode == 1:
             if not self.input_leap.server_mode:
@@ -271,78 +380,64 @@ class TaskBarIcon(wx.adv.TaskBarIcon):
                 if restart:
                     self.start()
 
-    def CreatePopupMenu(self):
-        def create_menu_item(menu, label, func, arg=None, kind=wx.ITEM_NORMAL,
-                checked=False, _s=[]):
-            # log("create_menu_item({}, {}, {}, {}, {}, {})".format(
-            #     menu, label, func, arg, kind, checked))
-            if len(_s) == 0:
-                _s.append(10)
-            mid = _s[0]
-            _s[0] += 1
-            item = wx.MenuItem(menu, mid, label, kind=kind)
-            cb = OneArgMenu(func, arg, item)
-            menu.Bind(wx.EVT_MENU, cb, id=item.GetId())
-            menu.Append(item)
-            if kind == wx.ITEM_RADIO or kind == wx.ITEM_CHECK:
-                item.Check(checked)
-            return item
-        menu = wx.Menu()
-        create_menu_item(menu, "Follow screensaver", self.set_follow, 3,
-                kind=wx.ITEM_CHECK,
-                checked=self.follow_screensaver)
-        create_menu_item(menu, "Server Mode", self.set_mode, 1,
-                kind=wx.ITEM_RADIO, checked=self.input_leap.server_mode)
-        create_menu_item(menu, "Client Mode", self.set_mode, 2,
-                kind=wx.ITEM_RADIO, checked=not self.input_leap.server_mode)
-        menu.AppendSeparator()
-        create_menu_item(menu, '10 Seconds', self.on_arm_timer, 10)
-        create_menu_item(menu, '1 minute', self.on_arm_timer, 60)
-        create_menu_item(menu, '30 Minutes', self.on_arm_timer, 32*60)
-        create_menu_item(menu, '1 Hour', self.on_arm_timer, 62*60)
-        create_menu_item(menu, '1.5 Hours', self.on_arm_timer, 92*60)
-        create_menu_item(menu, '2 Hours', self.on_arm_timer, 122*60)
-        menu.AppendSeparator()
-        create_menu_item(menu, 'Start', self.on_start)
-        create_menu_item(menu, 'Stop', self.on_stop)
-        menu.AppendSeparator()
-        create_menu_item(menu, 'Exit', self.on_exit)
-        return menu
+    @staticmethod
+    def collect_garbage():
+        gc.collect()
+        return GLib.SOURCE_CONTINUE
 
     def set_icon(self, choice):
-        icon = wx.Icon(choice[0])
-        self.SetIcon(icon, choice[1])
+        self.indicator.set_icon_full(*choice)
 
     def start(self):
         # log("TaskBarIcon::start")
         if not self.input_leap.running():
             self.input_leap.start()
-        self.timer.Start(1000*self.IDLE_TIMEOUT, wx.TIMER_ONE_SHOT)
-        self.updateIcon()
+        self.set_icon(self.idle_icon())
 
     def stop(self):
         # log("TaskBarIcon::stop")
-        self.iconTimer.Stop()
         self.set_icon(self.inhibited_icon())
         if self.input_leap.running():
             self.input_leap.stop()
 
-    def on_left_down(self, event):
+    def on_arm_timer(self, event, timeout, item):
+        # log('Turn off for {} seconds'.format(timeout))
+        self.stop()
+
+    def updateIcon(self):
+        # log('Timeout')
+        if self.input_leap.running(self.input_leap.current_icon):
+            if self.input_leap.has_connection():
+                self.set_icon(self.active_icon())
+            else:
+                self.set_icon(self.idle_icon())
+
+    def service_start_handler(self, *args, **kwargs):
+        # log('Turn On')
+        self.start()
+
+    def service_stop_handler(self, *args, **kwargs):
+        # log('Turn Off')
+        self.stop()
+
+    def service_toggle_handler(self, *args, **kwargs):
         # log('Toggle on-off')
-        self.timer.Stop()
         if self.input_leap.running():
             self.stop()
         else:
             self.start()
 
-    def on_arm_timer(self, event, timeout, item):
-        # log('Turn off for {} seconds'.format(timeout))
-        self.stop()
-        self.timer.Start(timeout*1000, wx.TIMER_ONE_SHOT)
+    def quit_handler(self, *args, **kwargs):
+        gtk_quit()
 
-    def on_timer(self, event):
+    def stop_delay_timer(self):
+        # cancel the prior off
+        if self.delay_id is not None:
+            GLib.source_remove(self.delay_id)
+            self.delay_id = None
+
+    def status_timer(self):
         # log('Timeout')
-        self.timer.Stop()
         if self.follow_screensaver:
             if self.saver.isIdle():
                 if self.input_leap.running():
@@ -351,46 +446,21 @@ class TaskBarIcon(wx.adv.TaskBarIcon):
                 if not self.input_leap.running():
                     self.start()
         else:
-            if not self.input_leap.running():
-                self.start()
+            if self.input_leap.current_icon != self.input_leap.INACTIVE:
+                if not self.input_leap.running():
+                    self.start()
+        self.updateIcon()
         # another round!
-        self.timer.Start(1000*self.IDLE_TIMEOUT, wx.TIMER_ONE_SHOT)
+        return GLib.SOURCE_CONTINUE
 
-    def updateIcon(self, event=None):
-        # log('Timeout')
-        if self.input_leap.running(self.current_icon):
-            if self.input_leap.has_connection():
-                self.set_icon(self.active_icon())
-            else:
-                self.set_icon(self.idle_icon())
-        # another round!
-        self.iconTimer.Start(1000, wx.TIMER_ONE_SHOT)
-
-    def on_start(self, event, arg, item):
-        # log('Turn On')
-        self.timer.Stop()
-        self.start()
-
-    def on_stop(self, event, arg, item):
-        # log('Turn Off')
-        self.timer.Stop()
-        self.stop()
-
-    def on_exit(self, event, arg, item):
-        wx.CallAfter(self.Destroy)
-        self.frame.Close()
-
-class App(wx.App):
-    def OnInit(self):
-        frame=wx.Frame(None)
-        self.SetTopWindow(frame)
-        TaskBarIcon(frame)
-        return True
+def gtk_quit(*args, **kwargs):
+    Gtk.main_quit()
 
 def main():
-    app = App(False)
-    app.MainLoop()
-
+    DBusGMainLoop(set_as_default=True)
+    signal.signal(signal.SIGINT, gtk_quit)
+    app = InputLeapApplication()
+    Gtk.main()
 
 if __name__ == '__main__':
     main()
