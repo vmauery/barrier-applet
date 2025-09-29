@@ -44,38 +44,42 @@ class ScreensaverStatus():
     IDLE = 60 # seconds
     def __init__(self, bus):
         self.bus = bus
-        self.handler = None
+        self.unlock_handler = None
+        self.lock_handler = None
+        self.bus.add_signal_receiver(self._active_changed,
+                                     dbus_interface='org.gnome.ScreenSaver',
+                                     signal_name='ActiveChanged',
+                                     bus_name='org.gnome.ScreenSaver')
 
-    def idleTime(self):
-        return 0
-        idle = self.bus.call_blocking('org.gnome.ScreenSaver',
+        self._is_active = self.bus.call_blocking('org.gnome.ScreenSaver',
                                       '/org/gnome/ScreenSaver',
                                       'org.gnome.ScreenSaver',
-                                      'GetActiveTime', '', [])
-        idle = int(idle)
-        if False:
-            if idle > 0:
-                log("screensaver is active for {} seconds".format(idle))
-            else:
-                log("screensaver is inactive")
-        return idle
-    def isIdle(self):
-        idle = self.idleTime()
-        return idle > self.IDLE
+                                      'GetActive', '', [])
 
-    def _unlock_handler(self, is_active):
-        print(f"org.gnome.ScreenSaver ActiveChanged -> {is_active}")
-        if not is_active and self.handler:
-            self.handler()
+    def is_locked(self):
+        return self._is_active
+
+    def _active_changed(self, is_active):
+        log(f"org.gnome.ScreenSaver ActiveChanged -> {is_active}")
+        self._is_active = is_active
+        if is_active:
+            if self.lock_handler:
+                log("calling lock_handler")
+                self.lock_handler()
+        else:
+            if self.unlock_handler:
+                log("calling unlock_handler")
+                self.unlock_handler()
 
     def unlock_callback(self, handler):
         if handler is None:
             return
-        self.handler = handler
-        self.bus.add_signal_receiver(self._unlock_handler,
-                                     dbus_interface='org.gnome.ScreenSaver',
-                                     signal_name='ActiveChanged',
-                                     bus_name='org.gnome.ScreenSaver')
+        self.unlock_handler = handler
+
+    def lock_callback(self, handler):
+        if handler is None:
+            return
+        self.lock_handler = handler
 
 class ScreensaverInhibit:
     def __init__(self, bus):
@@ -164,14 +168,17 @@ class Input_Leap:
             self.log_file.unlink(missing_ok=True)
             log("launching input-leap ({} mode) ...".format(self.settings.mode))
             if self.server_mode:
-                pname = '/usr/local/bin/input-leaps'
+                pname = '/usr/local/sbin/input-leaps'
+                log("checking for other input-leaps")
                 self.kill_others(pname)
+                log("starting new input-leaps")
                 self.p = subprocess.Popen([pname, '--no-tray',
                     '--no-daemon', '--restart', '--log', str(self.log_file)],
                         stdout=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL)
+                log(f"started new input-leaps: {self.p.pid}")
             else:
-                pname = '/usr/local/bin/input-leapc'
+                pname = '/usr/local/sbin/input-leapc'
                 self.kill_others(pname)
                 self.p = subprocess.Popen([pname, '--no-tray',
                     '--no-daemon', '--use-x11', '--restart',
@@ -193,7 +200,7 @@ class Input_Leap:
             self.p.terminate()
             try:
                 self.p.wait(timeout=0.5)
-            except TimeoutExpired:
+            except:
                 self.p.kill()
             self.p.wait()
             self.p = None
@@ -247,20 +254,19 @@ class InputLeapApplication(Gtk.Application):
         self.input_leap = Input_Leap()
         self.saver = ScreensaverStatus(self.bus)
         if self.input_leap.server_mode:
-            self.saver.unlock_callback(self.input_leap.unlock_remote)
+            self.saver.unlock_callback(self.on_unlock_screen)
         else:
             self.saver.unlock_callback(self.restart_daemon)
 
         self.follow_screensaver = self.input_leap.settings.follow_screensaver
+        self.saver.lock_callback(self.on_lock_screen)
+
         self.screensaver_inhibitor = None
 
-        if not self.follow_screensaver:
-            self.start()
+        if self.follow_screensaver and self.saver.is_locked():
+            self.stop()
         else:
-            if self.saver.isIdle():
-                self.stop()
-            else:
-                self.start()
+            self.start()
 
         self.set_icon(self.inhibited_icon())
 
@@ -326,6 +332,17 @@ class InputLeapApplication(Gtk.Application):
 
     def __del__(self):
         self.input_leap.stop()
+
+    def on_lock_screen(self):
+        if self.follow_screensaver:
+            log("follow_screensaver: stopping input-leap on screen lock")
+            self.stop()
+
+    def on_unlock_screen(self):
+        self.input_leap.unlock_remote()
+        if self.follow_screensaver:
+            log("follow_screensaver: restarting input-leap on screen unlock")
+            self.start()
 
     def restart_daemon(self, *args, **kwargs):
         log("restarting because of screen unlock")
@@ -450,7 +467,7 @@ class InputLeapApplication(Gtk.Application):
     def status_timer(self):
         # log('Timeout')
         if self.follow_screensaver:
-            if self.saver.isIdle():
+            if self.saver.is_locked():
                 if self.input_leap.running():
                     self.stop()
             else:
