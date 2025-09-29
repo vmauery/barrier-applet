@@ -85,11 +85,11 @@ class ScreensaverInhibit:
                                          '/org/freedesktop/ScreenSaver')
         self.iface = dbus.Interface(self.proxy, 'org.freedesktop.ScreenSaver')
         self.cookie = self.iface.Inhibit('work-inhibitor', "gnome-inhibit")
-        print("Inhibiting screensaver (pid: {}, cookie {})".format(
+        log("Inhibiting screensaver (pid: {}, cookie {})".format(
             os.getpid(), self.cookie))
     def __del__(self):
         if self.cookie is not None:
-            print("UnInhibiting screensaver (pid: {}, cookie {})".format(
+            log("UnInhibiting screensaver (pid: {}, cookie {})".format(
                 os.getpid(), self.cookie))
             self.iface.UnInhibit(self.cookie)
 
@@ -153,7 +153,7 @@ class Input_Leap:
         cmd = self.settings.remote_unlock_command
         if cmd is None:
             return
-        print(f"unlocking remote because of local screen unlock: {cmd}")
+        log(f"unlocking remote because of local screen unlock: {cmd}")
         self.p = subprocess.Popen([cmd],
             stdout=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL)
@@ -328,17 +328,17 @@ class InputLeapApplication(Gtk.Application):
         self.input_leap.stop()
 
     def restart_daemon(self, *args, **kwargs):
-        print("restarting because of screen unlock")
+        log("restarting because of screen unlock")
         self.delay_handler(None, 1)
 
     def delay_handler(self, widget, timeout):
-        print(f"delay_handler({timeout})")
+        log(f"delay_handler({timeout})")
         self.stop()
         self.stop_delay_timer()
         self.delay_id = GLib.timeout_add_seconds(timeout, self.delayed_start)
 
     def delayed_start(self):
-        print("delayed_start")
+        log("delayed_start")
         self.stop_delay_timer()
         self.start()
         return GLib.SOURCE_REMOVE
