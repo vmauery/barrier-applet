@@ -47,20 +47,20 @@ class ScreensaverStatus():
         self.unlock_handler = None
         self.lock_handler = None
         self.bus.add_signal_receiver(self._active_changed,
-                                     dbus_interface='org.gnome.ScreenSaver',
+                                     dbus_interface='org.kde.screensaver',
                                      signal_name='ActiveChanged',
-                                     bus_name='org.gnome.ScreenSaver')
+                                     bus_name='org.kde.screensaver')
 
-        self._is_active = self.bus.call_blocking('org.gnome.ScreenSaver',
-                                      '/org/gnome/ScreenSaver',
-                                      'org.gnome.ScreenSaver',
+        self._is_active = self.bus.call_blocking('org.kde.screensaver',
+                                      '/org/freedesktop/ScreenSaver',
+                                      'org.freedesktop.ScreenSaver',
                                       'GetActive', '', [])
 
     def is_locked(self):
         return self._is_active
 
     def _active_changed(self, is_active):
-        log(f"org.gnome.ScreenSaver ActiveChanged -> {is_active}")
+        log(f"org.kde.screensaver ActiveChanged -> {is_active}")
         self._is_active = is_active
         if is_active:
             if self.lock_handler:
@@ -88,7 +88,7 @@ class ScreensaverInhibit:
         self.proxy = self.bus.get_object('org.freedesktop.ScreenSaver',
                                          '/org/freedesktop/ScreenSaver')
         self.iface = dbus.Interface(self.proxy, 'org.freedesktop.ScreenSaver')
-        self.cookie = self.iface.Inhibit('work-inhibitor', "gnome-inhibit")
+        self.cookie = self.iface.Inhibit('work-inhibitor', "session-inhibit")
         log("Inhibiting screensaver (pid: {}, cookie {})".format(
             os.getpid(), self.cookie))
     def __del__(self):
