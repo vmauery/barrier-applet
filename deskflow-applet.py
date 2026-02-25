@@ -270,6 +270,13 @@ class InputLeapApplication(Gtk.Application):
 
         self.screensaver_inhibitor = None
 
+        self.systemDbus = dbus.SystemBus()
+        self.systemDbus.add_signal_receiver(
+            self.handle_sleep_signal,
+            signal_name="PrepareForSleep",
+            dbus_interface="org.freedesktop.login1.Manager"
+        )
+
         if self.follow_screensaver and self.saver.is_locked():
             self.stop()
         else:
@@ -339,6 +346,11 @@ class InputLeapApplication(Gtk.Application):
 
     def __del__(self):
         self.deskflow.stop()
+
+    def handle_sleep_signal(self, *args, **kwargs):
+        print(f"Received signal: {args}, {kwargs}")
+        if len(args) > 0 and args[0]:
+            self.delay_handler(None, 15)
 
     def on_lock_screen(self):
         if self.follow_screensaver:
