@@ -166,14 +166,14 @@ class DeskFlow:
             self.log_file.parent.mkdir(parents=True, exist_ok=True)
             self.log_file.unlink(missing_ok=True)
             log("launching deskflow ({} mode) ...".format(self.settings.mode))
+            pname = '/usr/bin/deskflow-core'
+            log("checking for other deskflow instances")
+            self.kill_others(pname)
             if self.server_mode:
-                pname = '/usr/bin/deskflow-server'
-                log("checking for other deskflow-server")
-                self.kill_others(pname)
                 log("starting new deskflow-server")
                 self.p = subprocess.Popen(
                         [
-                            pname, '-s', str(Path.home() / '.config' /
+                            pname, 'server', '-s', str(Path.home() / '.config' /
                                              'Deskflow' / 'Deskflow.conf'),
                             '-c', str(Path.home() / '.config' / 'Deskflow' /
                                       'deskflow-server.conf')
@@ -182,15 +182,15 @@ class DeskFlow:
                         stderr=subprocess.DEVNULL)
                 log(f"started new deskflow-server: {self.p.pid}")
             else:
-                pname = '/usr/bin/deskflow-client'
-                self.kill_others(pname)
+                log("starting new deskflow-client")
                 self.p = subprocess.Popen(
                         [
-                            pname, '-s', str(Path.home() / '.config' /
+                            pname, 'client', '-s', str(Path.home() / '.config' /
                                              'Deskflow' / 'deskflow-client.conf')
                         ],
                         stdout=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL)
+                log(f"started new deskflow-client: {self.p.pid}")
             if not self.p:
                 raise ExecutionError('Failed to start deskflow')
 
