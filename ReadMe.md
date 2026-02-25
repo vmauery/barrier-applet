@@ -1,10 +1,10 @@
 # Barrier Applet
 
 This is a python GTK system-tray applet intended to control the
-[Input Leap](https://github.com/input-leap/input-leap.git) application
+[Deskflow](https://github.com/deskflow/deskflow.git) application
 based on screensaver status.
 
-I know that Input Leap comes with a tray applet, but I wanted more control
+I know that Deskflow comes with a tray applet, but I wanted more control
 over the behavior, so I made this.
 
 My setup is a little complicated because connecting to a Windows+WSL2
